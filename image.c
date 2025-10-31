@@ -3,6 +3,9 @@
 #include <time.h>
 #include <string.h>
 #include "image.h"
+#include <stdlib.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -56,16 +59,83 @@ uint8_t getPixelValue(Image* srcImage,int x,int y,int bit,Matrix algorithm){
 //            destImage: A pointer to a  pre-allocated (including space for the pixel array) structure to receive the convoluted image.  It should be the same size as srcImage
 //            algorithm: The kernel matrix to use for the convolution
 //Returns: Nothing
-void convolute(Image* srcImage,Image* destImage,Matrix algorithm){
-    int row,pix,bit,span;
-    span=srcImage->bpp*srcImage->bpp;
-    for (row=0;row<srcImage->height;row++){
-        for (pix=0;pix<srcImage->width;pix++){
-            for (bit=0;bit<srcImage->bpp;bit++){
-                destImage->data[Index(pix,row,srcImage->width,bit,srcImage->bpp)]=getPixelValue(srcImage,pix,row,bit,algorithm);
+typedef struct {
+    Image *srcImage;
+    Image *destImage;
+    Matrix algorithm; /* copy of the 3x3 kernel for this thread */
+    int start_row;
+    int end_row;
+} ThreadArg;
+
+static void* convolute_worker(void *arg){
+    ThreadArg *t = (ThreadArg*)arg;
+    Image *src = t->srcImage;
+    Image *dest = t->destImage;
+    for (int row = t->start_row; row < t->end_row; ++row){
+        for (int pix = 0; pix < src->width; ++pix){
+            for (int bit = 0; bit < src->bpp; ++bit){
+                dest->data[Index(pix,row,src->width,bit,src->bpp)] =
+                    getPixelValue(src,pix,row,bit,t->algorithm);
             }
         }
     }
+    return NULL;
+}
+
+void convolute(Image* srcImage,Image* destImage,Matrix algorithm){
+    int num_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if (num_threads <= 0) num_threads = 4;
+    if (num_threads > srcImage->height) num_threads = srcImage->height;
+    pthread_t *threads = malloc(sizeof(pthread_t) * num_threads);
+    ThreadArg *args = malloc(sizeof(ThreadArg) * num_threads);
+    char *started = malloc(num_threads);
+    if (!threads || !args || !started) {
+        /* fallback to single-threaded if allocation fails */
+        for (int row = 0; row < srcImage->height; ++row)
+            for (int pix = 0; pix < srcImage->width; ++pix)
+                for (int bit = 0; bit < srcImage->bpp; ++bit)
+                    destImage->data[Index(pix,row,srcImage->width,bit,srcImage->bpp)] =
+                        getPixelValue(srcImage,pix,row,bit,algorithm);
+        free(threads); free(args); free(started);
+        return;
+    }
+
+    int base = srcImage->height / num_threads;
+    int rem = srcImage->height % num_threads;
+    int start = 0;
+    for (int i = 0; i < num_threads; ++i){
+        int rows = base + (i < rem ? 1 : 0);
+        args[i].srcImage = srcImage;
+        args[i].destImage = destImage;
+        memcpy(args[i].algorithm, algorithm, sizeof(Matrix)); /* copy kernel to thread arg */
+        args[i].start_row = start;
+        args[i].end_row = start + rows;
+        started[i] = 0;
+        if (rows > 0) {
+            int rc = pthread_create(&threads[i], NULL, convolute_worker, &args[i]);
+            if (rc == 0) {
+                started[i] = 1;
+            } else {
+                /* thread creation failed: do this chunk sequentially */
+                for (int row = args[i].start_row; row < args[i].end_row; ++row){
+                    for (int pix = 0; pix < srcImage->width; ++pix)
+                        for (int bit = 0; bit < srcImage->bpp; ++bit)
+                            destImage->data[Index(pix,row,srcImage->width,bit,srcImage->bpp)] =
+                                getPixelValue(srcImage,pix,row,bit,algorithm);
+                }
+            }
+        }
+        start += rows;
+    }
+
+    /* join threads that were started */
+    for (int i = 0; i < num_threads; ++i){
+        if (started[i]) pthread_join(threads[i], NULL);
+    }
+
+    free(threads);
+    free(args);
+    free(started);
 }
 
 //Usage: Prints usage information for the program
