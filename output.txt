@@ -1,0 +1,12 @@
+Script started on 2025-10-31 04:20:38+00:00 [TERM="xterm-ghostty" TTY="/dev/pts/1" COLUMNS="99" LINES="34"]
+
+mrao@darwin.hpc.udel.edu:~/CISC372_picProject$ cc image_pthreads.c -o image -lpthread -lm && ./image pic1.jpg edge
+Took 4 seconds
+
+mrao@darwin.hpc.udel.edu:~/CISC372_picProject$ cc image_openmp.c -o image_openmp -fopenmp -lm && ./image_openmp pic1.jpg edge
+Took 3 seconds
+
+mrao@darwin.hpc.udel.edu:~/CISC372_picProject$ exit
+exit
+
+Script done on 2025-10-31 04:21:26+00:00 [COMMAND_EXIT_CODE="0"]
